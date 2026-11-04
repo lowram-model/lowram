@@ -1,0 +1,29 @@
+torch==2.10.0
+transformers==5.0.0
+datasets==4.5.0
+numpy==2.2.6
+accelerate==1.12.0
+pandas==2.3.3
+lm-eval[ruler, longbench]==0.4.11
+scipy
+
+dotenv==0.9.9
+omegaconf
+tqdm
+wandb
+
+html2text==2025.4.15
+bs4==0.0.2
+jieba
+fuzzywuzzy
+rouge
+
+# notebooks and analysis - version not important as long as it runs
+ipython
+ipykernel
+matplotlib
+seaborn
+
+# formatting
+black
+black[jupyter]

@@ -1,0 +1,124 @@
+from contextlib import contextmanager
+
+import torch
+from lm_eval.models.huggingface import HFLM
+from lm_eval.models.utils_hf import stop_sequences_criteria
+
+from .config import CompressedCacheConfig
+from .core import CompressedCache
+
+
+class CompressedCacheHFLM(HFLM):
+    """
+    HFLM subclass that injects a new CompressedCache into every model call.
+    Note: once CompressiveCache is implemented in transformers, subclassing won't be needed
+    simply pass "cache_implementation": "compressive_cache" in generation kwargs
+    """
+
+    def __init__(
+        self,
+        cache_config: CompressedCacheConfig,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self._cache_config = cache_config
+        self.reset_compression_stats()
+
+    def reset_compression_stats(self) -> None:
+        self._original_bytes = 0
+        self._compressed_bytes = 0
+
+    @property
+    def aggregate_ratio(self) -> float | None:
+        if not self._compressed_bytes:
+            return None
+        return self._original_bytes / self._compressed_bytes
+
+    @contextmanager
+    def _record_prefill(self, cache, padding_mask):
+        record = None
+
+        def capture(module, inputs, output):
+            nonlocal record
+            if record is None:
+                record = cache.prefill_compression_stats(padding_mask)
+
+        handle = self.model.register_forward_hook(capture)
+        try:
+            yield
+        finally:
+            handle.remove()
+
+        if record is not None:
+            self._original_bytes += record["original_bytes"]
+            self._compressed_bytes += record["compressed_bytes"]
+
+    def set_cache_config(self, cache_config: CompressedCacheConfig) -> None:
+        """Use a new immutable cache config for subsequent model calls."""
+        self._cache_config = cache_config
+
+    def _make_cache(self, cache_context=None):
+        return CompressedCache(
+            config=self._cache_config,
+            cache_context=cache_context,
+            verbose=False,
+        )
+
+    def _model_call(self, inps, attn_mask=None, labels=None):
+        with (
+            torch.no_grad(),
+            torch.autocast(
+                device_type=self.device.type,
+                dtype=self.mixed_precision_dtype,
+                enabled=self.mixed_precision_dtype is not None,
+            ),
+        ):
+            if attn_mask is not None or labels is not None:
+                assert attn_mask is not None and labels is not None
+                return self.model(
+                    input_ids=inps, attention_mask=attn_mask, labels=labels
+                ).logits
+            cache = self._make_cache(
+                {"padding_mask": torch.ones_like(inps, dtype=torch.bool)}
+            )
+            with self._record_prefill(
+                cache, torch.ones_like(inps, dtype=torch.bool)
+            ):
+                output = self.model(inps, past_key_values=cache)
+            return output.logits
+
+    def _model_generate(self, context, max_length, stop, **generation_kwargs):
+        cache = self._make_cache(
+            {"padding_mask": generation_kwargs["attention_mask"]}
+        )
+        generation_kwargs["past_key_values"] = cache
+        generation_kwargs["temperature"] = generation_kwargs.get(
+            "temperature", 0.0
+        )
+        do_sample = generation_kwargs.get("do_sample")
+
+        if (
+            temp := generation_kwargs.get("temperature")
+        ) == 0.0 and do_sample is None:
+            generation_kwargs["do_sample"] = do_sample = False
+
+        if do_sample is False and temp == 0.0:
+            generation_kwargs.pop("temperature", None)
+        stopping_criteria = stop_sequences_criteria(
+            self.tokenizer, stop, context.shape[1], context.shape[0]
+        )
+        with self._record_prefill(
+            cache, generation_kwargs["attention_mask"]
+        ), torch.autocast(
+            device_type=self.device.type,
+            dtype=self.mixed_precision_dtype,
+            enabled=self.mixed_precision_dtype is not None,
+        ):
+            output = self.model.generate(
+                input_ids=context,
+                max_length=max_length,
+                stopping_criteria=stopping_criteria,
+                pad_token_id=self.tokenizer.pad_token_id,
+                **generation_kwargs,
+            )
+        return output

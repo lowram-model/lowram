@@ -1,0 +1,14 @@
+.vscode
+__pycache__
+wget-log*
+
+.env
+*.so
+
+old_checkpoints/*
+results/*
+wandb/
+
+slurm/*
+scripts/*
+analysis/*

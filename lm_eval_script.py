@@ -1,0 +1,189 @@
+import os
+import json
+import argparse
+from omegaconf import OmegaConf
+import torch
+
+from lm_eval import evaluator
+from lm_eval.utils import make_table
+from lm_eval.tasks import TaskManager, get_task_dict
+
+from cache import CompressedCacheHFLM, build_cache_config
+from cache.backends.mlp_values import enable_decode_compilation
+from model.attention_predictor import (
+    get_attn_predictor_hook_handles,
+    apply_attn_predictor_config,
+)
+from model.selective_attention import install_selective_attention
+from model.unpadded_attention import attention_for_batch
+from utils.args import (
+    add_cache_args,
+    list_of_strings,
+    validate_cache_args as validate_args,
+)
+from utils.data import filter_tasks_by_min_seq_len
+from utils.logging import get_output_path
+from utils.model import get_device, get_model_and_tokenizer
+
+GEN_KWARGS = {
+    "do_sample": False,
+    "use_cache": True,
+    "logits_to_keep": 1,
+}
+
+
+def get_tasks(tasks, print_tasks=True):
+    if len(tasks) == 1:
+        task_conf = OmegaConf.load("config/tasks.yaml")
+        if tasks[0] in task_conf:
+            tasks = OmegaConf.to_container(task_conf[tasks[0]], resolve=True)
+    if print_tasks:
+        print(f"Evaluating tasks: {tasks}")
+    return tasks
+
+
+def evaluate_tasks(
+    lm, tasks, *, batch_size, task_manager, limit, log_samples=False
+):
+    merged = {}
+    lm.reset_compression_stats()
+    with attention_for_batch(lm.model, batch_size):
+        for task in tasks:
+            results = evaluator.simple_evaluate(
+                model=lm,
+                gen_kwargs=GEN_KWARGS,
+                tasks=[task],
+                num_fewshot=0,
+                batch_size=batch_size,
+                max_batch_size=batch_size,
+                device=get_device(lm),
+                task_manager=task_manager,
+                limit=limit,
+                log_samples=log_samples,
+            )
+            for key, value in results.items():
+                if isinstance(value, dict) and isinstance(
+                    merged.get(key, {}), dict
+                ):
+                    merged.setdefault(key, {}).update(value)
+                else:
+                    merged[key] = value
+    return merged
+
+
+@torch.no_grad()
+def main(args):
+    model, tokenizer = get_model_and_tokenizer(args.model_name)
+    selective_handles = []
+    if args.selective_reconstruction:
+        enable_decode_compilation()
+        selective_handles = install_selective_attention(model)
+
+    attn_predictor_hook_handles = get_attn_predictor_hook_handles(args, model)
+
+    cache_config = build_cache_config(args, model)
+
+    model.eval()
+
+    args.tasks = get_tasks(args.tasks)
+
+    lm = CompressedCacheHFLM(
+        cache_config=cache_config,
+        pretrained=model,
+        tokenizer=tokenizer,
+        max_length=None,
+        batch_size=args.batch_size,
+        max_batch_size=args.batch_size,
+        truncation=False,
+        trust_remote_code=True,
+    )
+    metadata = {"tokenizer": args.model_name}
+    if args.max_seq_lengths is not None:
+        metadata["max_seq_lengths"] = args.max_seq_lengths
+    tm = TaskManager(metadata=metadata)
+
+    eval_tasks = args.tasks
+    if args.min_seq_len is not None:
+        task_dict = get_task_dict(args.tasks, tm)
+        eval_tasks = filter_tasks_by_min_seq_len(
+            task_dict, tokenizer, args.min_seq_len
+        )
+
+    results = evaluate_tasks(
+        lm,
+        eval_tasks,
+        batch_size=args.batch_size,
+        task_manager=tm,
+        limit=args.limit,
+    )
+
+    print(make_table(results))
+
+    results["results"]["config"] = vars(args)
+    results["results"]["compression"] = {
+        "aggregate_ratio": lm.aggregate_ratio,
+    }
+
+    output_dir = os.path.join(
+        args.output_dir, args.model_name.replace("/", "_")
+    )
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(
+        output_dir,
+        f"lm_eval_kc_{args.k_cache_type}_vc_{args.v_cache_type}_ml_{bool(args.meta_weights_path)}"
+        + "_{}.json",
+    )
+    output_path = get_output_path(output_path)
+    with open(output_path, "w") as f:
+        json.dump(results["results"], f, ensure_ascii=False, indent=4)
+    print(f"Results saved to {output_path}")
+    for handle in attn_predictor_hook_handles + selective_handles:
+        handle.remove()
+    return results
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="LM eval harness script")
+    parser.add_argument(
+        "-m",
+        "--model_name",
+        type=str,
+        default="meta-llama/Llama-3.1-8B-Instruct",
+    )
+    parser.add_argument("-o", "--output_dir", type=str, default="./results")
+    parser.add_argument(
+        "-t", "--tasks", type=list_of_strings, default=["longbench"]
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Max number of samples per task.",
+    )
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument(
+        "--max_seq_lengths",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Sequence lengths for RULER tasks.",
+    )
+    parser.add_argument(
+        "--min_seq_len",
+        type=int,
+        default=None,
+        help="Only evaluate samples whose prompt is at least this many tokens.",
+    )
+    add_cache_args(parser)
+    args = parser.parse_args()
+    validate_args(parser, args)
+    args = apply_attn_predictor_config(args)
+
+    print("Config for lm-eval: ", vars(args))
+
+    return args
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)
