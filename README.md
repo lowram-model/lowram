@@ -1,5 +1,6 @@
 # LowRAM
-[![Website](https://img.shields.io/badge/Website-LowRAM-blue)](https://lowram-model.github.io/lowram/)
+[![Paper](https://img.shields.io/badge/arXiv-2611.07025-b31b1b)](https://arxiv.org/abs/2611.07025v1)
+[![Website](https://img.shields.io/badge/Website-LowRAM-blue)](https://lowram-model.github.io/)
 
 Supplementary code for **LowRAM: Low-Rank Keys and Amortised Values for Composable KV Cache Compression at Test-Time**.
 
