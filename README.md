@@ -13,7 +13,7 @@ LowRAM compresses the KV cache used by long-context LLMs. It reconstructs values
 The repository includes a Transformers cache implementation, pretrained predictor checkpoints, and runnable examples for Llama and Mistral.
 
 <!-- Deploy the website's og.png before merging this README image. -->
-<p align="center"><img src="https://lowram-model.github.io/og.png" width="820" alt="LowRAM: up to 26.9× KV-cache compression, retaining 94.5% of the uncompressed LongBench score on Mistral-7B prompts over 10K tokens, with quantisation and eviction."></p>
+<p align="center"><img src="https://lowram-model.github.io/og.png" width="600" alt="LowRAM: up to 26.9× KV-cache compression, retaining 94.5% of the uncompressed LongBench score on Mistral-7B prompts over 10K tokens, with quantisation and eviction."></p>
 
 ## Results at a glance
 
