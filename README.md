@@ -2,7 +2,9 @@
 
 [![Paper](https://img.shields.io/badge/arXiv-2611.07025-b31b1b)](https://arxiv.org/abs/2611.07025)
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Paper-2611.07025-ffd21e)](https://huggingface.co/papers/2611.07025)
+[![Models](https://img.shields.io/badge/%F0%9F%A4%97%20Models-LowRAM-ffd21e)](https://huggingface.co/collections/lowram-model/lowram-6af3470101754088dbf0161c)
 [![Website](https://img.shields.io/badge/Website-LowRAM-blue)](https://lowram-model.github.io/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green)](LICENSE)
 
 **Why spend memory on what you can predict?**
 
@@ -127,6 +129,25 @@ The pretrained checkpoints are stored with [Git LFS](https://git-lfs.com) (`git 
 
 Use the checkpoint that matches the model you are evaluating. If loading fails with `UnpicklingError: invalid load key, 'v'`, the file is still an LFS pointer, so run `git lfs pull`.
 
+The same checkpoints are also on the Hugging Face Hub ([collection](https://huggingface.co/collections/lowram-model/lowram-6af3470101754088dbf0161c)):
+
+| Base model | Hugging Face repository |
+| --- | --- |
+| `Llama-3.1-8B-Instruct` | [lowram-model/lowram-llama-3.1-8b](https://huggingface.co/lowram-model/lowram-llama-3.1-8b) |
+| `Mistral-7B-Instruct-v0.3` | [lowram-model/lowram-mistral-7b](https://huggingface.co/lowram-model/lowram-mistral-7b) |
+
+To fetch them from the Hub instead of Git LFS, run this from the repository root (shown for Llama; for Mistral use `lowram-model/lowram-mistral-7b` and `Mistral-7B-Instruct-v0.3`):
+
+```python
+import pathlib, shutil
+from huggingface_hub import snapshot_download
+
+src = pathlib.Path(snapshot_download("lowram-model/lowram-llama-3.1-8b"))
+for part in ["meta_init", "value_mlps", "attention_predictor"]:
+    shutil.copytree(src / part, pathlib.Path("checkpoints") / part / "Llama-3.1-8B-Instruct",
+                    dirs_exist_ok=True)
+```
+
 ## Evaluation
 
 Evaluation runs through [lm-eval-harness](https://github.com/EleutherAI/lm-evaluation-harness) on RULER and LongBench.
@@ -203,3 +224,7 @@ Using LowRAM in your research? Please cite our paper.
   url     = {https://arxiv.org/abs/2611.07025}
 }
 ```
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
